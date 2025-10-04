@@ -154,9 +154,7 @@
 
 
 
-
-// /api/aggregate-vault.js
-import fetch from 'node-fetch'; // if needed in Vercel Node.js
+import fetch from 'node-fetch';
 
 const HUBSPOT_BASE = 'https://api.hubapi.com';
 const VAULT_OBJECT_TYPE = '2-48397499';
@@ -200,28 +198,27 @@ async function fetchAllPages(initialPath) {
 }
 
 export default async function handler(req, res) {
-  // --- 1️⃣ CORS Headers ---
-  const allowedOrigin = 'https://portal.eqrp.com'; // HubSpot domain
+  // 🔹 1. CORS Headers — MUST be first
+  const allowedOrigin = 'https://portal.eqrp.com';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
 
-  // Handle preflight OPTIONS
+  // 🔹 2. OPTIONS preflight — MUST return immediately
   if (req.method === 'OPTIONS') return res.status(204).end();
 
-  // --- 2️⃣ Main logic ---
   try {
     const contactId = req.query.contactId || req.query.contact_id;
     if (!contactId) return jsonError(res, 400, 'contactId query required');
 
-    // 2a) Get vault IDs associated with contact
+    // --- 2a. Get vault IDs ---
     const assocPath = `/crm/v3/objects/contacts/${contactId}/associations/${VAULT_OBJECT_TYPE}?limit=100`;
     const vaultAssoc = await fetchAllPages(assocPath);
     const vaultIds = vaultAssoc.map(r => r.id);
     if (!vaultIds.length)
       return res.status(200).json({ header: { goldOunces: 0, silverOunces: 0 }, items: [] });
 
-    // 2b) Get holdings
+    // --- 2b. Get holdings ---
     let holdingIds = new Set();
     for (const vId of vaultIds) {
       const path = `/crm/v3/objects/${VAULT_OBJECT_TYPE}/${vId}/associations/${VAULT_HOLDING_OBJECT_TYPE}?limit=100`;
@@ -232,7 +229,7 @@ export default async function handler(req, res) {
     if (!holdingIds.length)
       return res.status(200).json({ header: { goldOunces: 0, silverOunces: 0 }, items: [] });
 
-    // 2c) Batch read holdings
+    // --- 2c. Batch read holdings ---
     const PROPS = ['product_type','remaining_quantity','ounces_per_unit','metal_type'];
     const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i*n, i*n+n));
     let holdings = [];
@@ -242,7 +239,7 @@ export default async function handler(req, res) {
       holdings.push(...(r.results || []));
     }
 
-    // 2d) Aggregate
+    // --- 2d. Aggregate ---
     const productMap = {};
     for (const h of holdings) {
       const p = h.properties || {};
@@ -255,14 +252,13 @@ export default async function handler(req, res) {
       productMap[productType].totalOunces += qty * ouncesPerUnit;
     }
 
-    // 2e) Totals
+    // --- 2e. Totals ---
     let goldTotal = 0, silverTotal = 0;
     Object.values(productMap).forEach(r => {
       if ((r.metalType || '').toLowerCase() === 'gold') goldTotal += r.totalOunces;
       if ((r.metalType || '').toLowerCase() === 'silver') silverTotal += r.totalOunces;
     });
 
-    // 2f) Final items
     const items = Object.keys(productMap).map(k => ({
       productType: k,
       units: productMap[k].totalQty,
@@ -270,6 +266,7 @@ export default async function handler(req, res) {
       metalType: productMap[k].metalType
     }));
 
+    // --- 3. Return JSON ---
     return res.status(200).json({ header: { goldOunces: goldTotal, silverOunces: silverTotal }, items });
   } catch (err) {
     console.error('[Vault API] Error:', err);
